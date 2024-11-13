@@ -1,0 +1,313 @@
+import RPi.GPIO as GPIO
+from time import sleep
+import speech_recognition as sr
+
+# GPIO pin assignments for motors
+in1 = 24
+in2 = 23
+enA = 25
+in3 = 17
+in4 = 27
+enB = 22
+
+# GPIO pin assignments for ultrasonic sensor
+TRIG = 18
+ECHO = 4
+
+# GPIO pin assignments for joystick (simulated digital reading for VRX and VRY)
+joystick_vrx = 5  # This should be connected to a digital read method
+joystick_vry = 6  # This should be connected to a digital read method
+joystick_sw = 26  # Switch pin for button press
+
+# Initialize GPIO pins
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+
+GPIO.setup(in1, GPIO.OUT)
+GPIO.setup(in2, GPIO.OUT)
+GPIO.setup(enA, GPIO.OUT)
+GPIO.setup(in3, GPIO.OUT)
+GPIO.setup(in4, GPIO.OUT)
+GPIO.setup(enB, GPIO.OUT)
+
+GPIO.setup(TRIG, GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
+
+GPIO.setup(joystick_vrx, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(joystick_vry, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(joystick_sw, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+GPIO.output(in1, GPIO.LOW)
+GPIO.output(in2, GPIO.LOW)
+GPIO.output(in3, GPIO.LOW)
+GPIO.output(in4, GPIO.LOW)
+
+# Initialize PWM for each motor driver channel
+pA = GPIO.PWM(enA, 1000)
+pB = GPIO.PWM(enB, 1000)
+pA.start(25)
+pB.start(25)
+
+print("\n")
+print("Voice-controlled wheelchair")
+print("Commands: forward, backward, left, right, stop, low, medium, high, exit")
+print("\n")
+
+# Initialize recognizer and translator
+recognizer = sr.Recognizer()
+microphone = sr.Microphone()
+
+# Movement commands dictionary
+commands = {
+    'forward': 'forward',
+    'backward': 'backward',
+    'left': 'left',
+    'right': 'right',
+    'stop': 'stop',
+    'low': 'low',
+    'medium': 'medium',
+    'high': 'high'
+}
+
+telugu_to_english_commands = {
+    'ముందుకు': 'forward',
+    'వెనుకకు': 'backward',
+    'ఎడమ': 'left',
+    'కుడి': 'right',
+    'ఆపు': 'stop',
+    'తక్కువ': 'low',
+    'మధ్యస్థ': 'medium',
+    'ఎక్కువ': 'high'
+}
+
+hindi_to_english_commands = {
+    'आगे': 'forward',
+    'पीछे': 'backward',
+    'बाएँ': 'left',
+    'दाएँ': 'right',
+    'रुकें': 'stop',
+    'कम': 'low',
+    'मध्यम': 'medium',
+    'तेज': 'high'
+}
+
+def get_voice_command(language='en-IN'):
+    with microphone as source:
+        print("Listening...")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+        try:
+            command = recognizer.recognize_google(audio, language=language).lower()
+            print(f"Command received: {command}")
+            return command
+        except sr.UnknownValueError:
+            print("Sorry, I did not understand that.")
+            return None
+        except sr.RequestError:
+            print("Could not request results; check your network connection")
+            return None
+
+def move_forward():
+    GPIO.output(in1, GPIO.HIGH)
+    GPIO.output(in2, GPIO.LOW)
+    GPIO.output(in3, GPIO.HIGH)
+    GPIO.output(in4, GPIO.LOW)
+
+def move_backward():
+    GPIO.output(in1, GPIO.LOW)
+    GPIO.output(in2, GPIO.HIGH)
+    GPIO.output(in3, GPIO.LOW)
+    GPIO.output(in4, GPIO.HIGH)
+
+def stop():
+    GPIO.output(in1, GPIO.LOW)
+    GPIO.output(in2, GPIO.LOW)
+    GPIO.output(in3, GPIO.LOW)
+    GPIO.output(in4, GPIO.LOW)
+
+def turn_left():
+    GPIO.output(in1, GPIO.LOW)
+    GPIO.output(in2, GPIO.HIGH)
+    GPIO.output(in3, GPIO.HIGH)
+    GPIO.output(in4, GPIO.LOW)
+    sleep(0.5)
+    stop()
+
+def turn_right():
+    GPIO.output(in1, GPIO.HIGH)
+    GPIO.output(in2, GPIO.LOW)
+    GPIO.output(in3, GPIO.LOW)
+    GPIO.output(in4, GPIO.HIGH)
+    sleep(0.5)
+    stop()
+
+def set_speed(speed):
+    if speed == 'low':
+        duty_cycle = 25
+    elif speed == 'medium':
+        duty_cycle = 50
+    elif speed == 'high':
+        duty_cycle = 75
+    pA.ChangeDutyCycle(duty_cycle)
+    pB.ChangeDutyCycle(duty_cycle)
+
+def translate_command(command, language):
+    if language == 'te':
+        translated_command = telugu_to_english_commands.get(command, None)
+    elif language == 'hi':
+        translated_command = hindi_to_english_commands.get(command, None)
+    else:
+        translated_command = commands.get(command, None)
+    
+    print(f"Translated command: {translated_command}")
+    return translated_command
+
+def measure_distance():
+    GPIO.output(TRIG, False)
+    sleep(0.2)
+    
+    GPIO.output(TRIG, True)
+    sleep(0.00001)
+    GPIO.output(TRIG, False)
+    
+    while GPIO.input(ECHO) == 0:
+        pulse_start = time.time()
+    
+    while GPIO.input(ECHO) == 1:
+        pulse_end = time.time()
+    
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 17150
+    distance = round(distance, 2)
+    
+    return distance
+
+def voice_control(language='en'):
+    while True:
+        command = get_voice_command(language)
+
+        if command:
+            translated_command = translate_command(command, language)
+            
+            if translated_command and translated_command in commands:
+                command = commands[translated_command]
+
+                if command == 'forward':
+                    distance = measure_distance()
+                    if distance < 20:
+                        print("Obstacle detected! Distance:", distance, "cm")
+                        stop()
+                        while True:
+                            next_command = get_voice_command(language)
+                            if next_command:
+                                next_translated_command = translate_command(next_command, language)
+                                if next_translated_command in ['left', 'right', 'backward']:
+                                    command = next_translated_command
+                                    break
+                                else:
+                                    print("Please give a valid command (left, right, backward).")
+                            else:
+                                print("Listening for the next command...")
+                        if command == 'left':
+                            print("Turning left")
+                            turn_left()
+                        elif command == 'right':
+                            print("Turning right")
+                            turn_right()
+                        elif command == 'backward':
+                            print("Moving backward")
+                            move_backward()
+                    else:
+                        print("Moving forward")
+                        move_forward()
+
+                elif command == 'backward':
+                    print("Moving backward")
+                    move_backward()
+
+                elif command == 'stop':
+                    print("Stopping")
+                    stop()
+
+                elif command == 'left':
+                    print("Turning left")
+                    turn_left()
+
+                elif command == 'right':
+                    print("Turning right")
+                    turn_right()
+
+                elif command in ['low', 'medium', 'high']:
+                    print(f"Setting speed to {command}")
+                    set_speed(command)
+
+                elif command == 'exit':
+                    GPIO.cleanup()
+                    break
+
+                else:
+                    print("Unrecognized command, please try again.")
+            else:
+                print("Could not translate command, please try again.")
+        distance = measure_distance()
+        print(f"Current distance to obstacle: {distance} cm")
+        sleep(1)
+
+def joystick_control():
+    while True:
+        if GPIO.input(joystick_sw) == GPIO.LOW:
+            print("Stopping")
+            stop()
+            continue
+        
+        vrx_value = GPIO.input(joystick_vrx)
+        vry_value = GPIO.input(joystick_vry)
+
+        if vrx_value == 0 and vry_value == 0:
+            print("Joystick centered")
+            stop()
+        elif vrx_value == 1 and vry_value == 0:
+            print("Turning right")
+            turn_right()
+        elif vrx_value == 0 and vry_value == 1:
+            print("Turning left")
+            turn_left()
+        elif vrx_value == 1 and vry_value == 1:
+            distance = measure_distance()
+            if distance < 20:
+                print("Obstacle detected! Distance:", distance, "cm")
+                stop()
+            else:
+                print("Moving forward")
+                move_forward()
+        elif vrx_value == -1 and vry_value == -1:
+            print("Moving backward")
+            move_backward()
+
+        sleep(0.1)
+
+# Main control logic
+print("Please choose control mode: joystick or voice")
+control_mode = get_voice_command('en-IN')
+
+if control_mode:
+    if 'joystick' in control_mode:
+        joystick_control()
+    elif 'voice' in control_mode:
+        print("Please choose language: English, Telugu, or Hindi")
+        language_choice = get_voice_command('en-IN')
+        
+        if language_choice:
+            if 'telugu' in language_choice:
+                voice_control('te-IN')
+            elif 'hindi' in language_choice:
+                voice_control('hi-IN')
+            else:
+                voice_control('en-IN')
+        else:
+            print("Could not understand the language choice. Defaulting to English.")
+            voice_control('en-IN')
+    else:
+        print("Invalid control mode selected. Please restart and choose either joystick or voice.")
+else:
+    print("Could not understand control mode choice. Please restart and choose either joystick or voice.")
